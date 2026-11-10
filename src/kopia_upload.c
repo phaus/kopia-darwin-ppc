@@ -263,6 +263,10 @@ static void format_mtime_rfc3339(long long epoch_s, long nsec, char *out, size_t
              g.tm_hour, g.tm_min, g.tm_sec, nsec);
 }
 
+/* aggregate summary for the most recently built directory + root file size */
+static long long g_total_size, g_files, g_dirs;
+static char g_maxtime[64] = "";
+
 static int cmp_entry(const void *a, const void *b) {
     return strcmp(((const dir_entry_t *)a)->name, ((const dir_entry_t *)b)->name);
 }
@@ -374,6 +378,12 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out)
     }
     if (maxtime[0] == '\0') format_mtime_rfc3339(0, 0, maxtime, sizeof(maxtime));
 
+    /* remember summary — the outermost (root) dir finishes last */
+    g_total_size = total_size;
+    g_files = files;
+    g_dirs = dirs;
+    snprintf(g_maxtime, sizeof(g_maxtime), "%s", maxtime);
+
     strbuf_t sb;
     sb_init(&sb);
     sb_puts(&sb, "{\"stream\":\"kopia:directory\",\"entries\":[");
@@ -440,7 +450,18 @@ int kup_snapshot(kopia_session_t *s, const char *source_path,
     const char *base = strrchr(abspath, '/');
     snprintf(rootname, sizeof(rootname), "%s", base ? base + 1 : abspath);
     int mode = 0;
-    if (stat(abspath, &st) == 0) mode = (int)(st.st_mode & 07777);
+    int is_dir = 0;
+    long long root_size = 0;
+    if (stat(abspath, &st) == 0) {
+        mode = (int)(st.st_mode & 07777);
+        is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+        if (!is_dir) {
+            root_size = (long long)st.st_size;
+            g_total_size = root_size;
+            g_files = 1;
+            g_dirs = 0;
+        }
+    }
 
     strbuf_t sb;
     sb_init(&sb);
@@ -451,10 +472,20 @@ int kup_snapshot(kopia_session_t *s, const char *source_path,
     sb_puts(&sb, ",\"path\":");
     sb_puts_json(&sb, abspath);
     sb_printf(&sb, "},\"description\":\"kopia-darwin-ppc\",\"startTime\":\"%s\",\"endTime\":\"%s\",", mt, mt);
-    sb_puts(&sb, "\"stats\":{},\"rootEntry\":{\"name\":");
+    sb_printf(&sb, "\"stats\":{\"totalSize\":%lld,\"fileCount\":%lld,\"dirCount\":%lld},",
+              g_total_size, g_files, g_dirs);
+    sb_puts(&sb, "\"rootEntry\":{\"name\":");
     sb_puts_json(&sb, rootname);
-    sb_printf(&sb, ",\"type\":\"%s\",\"mode\":\"0%o\",\"mtime\":\"%s\",\"obj\":\"%s\"}}",
-              S_ISDIR(st.st_mode) ? "d" : "f", mode, mt, root_object_id);
+    if (is_dir) {
+        /* dirs carry a summary; file size goes on the entry itself */
+        sb_printf(&sb, ",\"type\":\"d\",\"mode\":\"0%o\",\"mtime\":\"%s\","
+                     "\"summ\":{\"size\":%lld,\"files\":%lld,\"dirs\":%lld,\"maxTime\":\"%s\"}",
+                  mode, mt, g_total_size, g_files, g_dirs, g_maxtime);
+        sb_printf(&sb, ",\"obj\":\"%s\"}}", root_object_id);
+    } else {
+        sb_printf(&sb, ",\"type\":\"f\",\"mode\":\"0%o\",\"size\":%lld,\"mtime\":\"%s\",\"obj\":\"%s\"}}",
+                  mode, root_size, mt, root_object_id);
+    }
 
     const char *labels[8] = {
         "type", "snapshot",
