@@ -51,6 +51,9 @@ message formats and file references) is in [`docs/kopia-protocol.md`](docs/kopia
 
 ## Building
 
+Full setup guide (osxcross + Mac OS X 10.5 SDK + Apple GCC 4.2.1 + static mbedTLS):
+[`docs/cross-compile.md`](docs/cross-compile.md). Short version:
+
 ```bash
 # toolchain + mbedtls locations (adjust to your setup)
 CROSS32=/opt/osxcross/target/bin/oppc32-gcc
