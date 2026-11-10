@@ -131,10 +131,25 @@ typedef struct {
     char           hash_function[64];
     char           splitter_name[64];
     int            supports_compression;
+
+    /* out-of-order response stash (server handles requests in goroutines) */
+    struct {
+        uint64_t       id;
+        unsigned char *msg;
+        size_t         len;
+    } pending[64];
+    int npending;
 } kopia_session_t;
 
 int ksess_connect(kopia_session_t *s, const kopia_config_t *cfg, char *err, size_t err_len);
 void ksess_close(kopia_session_t *s);
+
+/* Read the SessionResponse with the given request_id; stashes out-of-order
+ * responses (the server processes requests in concurrent goroutines and may
+ * answer out of order). Returns 0 ok, <0 error. */
+int ksess_read_response(kopia_session_t *s, uint64_t request_id,
+                        unsigned char **resp, size_t *resp_len);
+
 int ksess_write_content(kopia_session_t *s, const char *prefix,
                         const unsigned char *data, size_t len,
                         char *content_id, size_t cid_len);

@@ -84,10 +84,20 @@ int h2_connect(h2_conn_t *c, const char *host, const char *port,
         return -1;
     }
 
-    /* empty SETTINGS, then expect server SETTINGS + ACK it */
-    if (h2_write_frame(c, F_SETTINGS, 0, 0, NULL, 0) != 0) {
-        snprintf(err, err_len, "settings write failed");
-        return -1;
+    /* SETTINGS: INITIAL_WINDOW_SIZE (id 4) = 1 MB so tiny responses don't
+     * exhaust the default 64 KB stream window; plus a connection-level
+     * WINDOW_UPDATE raising the connection window to match. */
+    {
+        unsigned char settings[6] = { 0x00, 0x04, 0x00, 0x10, 0x00, 0x00 };
+        if (h2_write_frame(c, F_SETTINGS, 0, 0, settings, 6) != 0) {
+            snprintf(err, err_len, "settings write failed");
+            return -1;
+        }
+        unsigned char wu[4] = { 0x00, 0x0f, 0x00, 0x00 }; /* 1MB - 65535 */
+        if (h2_write_frame(c, F_WINDOW_UPDATE, 0, 0, wu, 4) != 0) {
+            snprintf(err, err_len, "conn window update failed");
+            return -1;
+        }
     }
 
     unsigned char hdr[9], payload[16384];
@@ -191,7 +201,10 @@ int h2_send_data(h2_conn_t *c, int stream_id, const unsigned char *buf, size_t l
                 fprintf(stderr, "diag: send-wait pump rc=%d\n", prc);
                 return -1;
             }
-            if (got_data || c->trailers_seen) return -2;
+            if (c->trailers_seen) return -2;
+            /* got_data is fine — a response to an earlier request may arrive
+             * while we are still sending (server is fully async); the frame
+             * stays buffered in data_buf for the matching ksess_read_response. */
         }
         size_t avail = (size_t)(c->conn_send_window < c->stream_send_window
                                     ? c->conn_send_window
@@ -296,7 +309,10 @@ int h2_read_frame(h2_conn_t *c, int stream_id, int *got_data) {
     case F_DATA:
         if (sid == stream_id) {
             append_data(c, payload, plen);
-            if (plen) send_window_update(c, 0, plen); /* replenish conn window */
+            if (plen) {
+                send_window_update(c, 0, plen);         /* connection window */
+                send_window_update(c, stream_id, plen); /* stream window */
+            }
             if (flags & FLAG_END_STREAM) { c->trailers_seen = 1; }
             *got_data = 1;
         }
