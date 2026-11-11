@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h> /* sleep */
 
 #include "kopia_internal.h"
 
@@ -84,12 +85,28 @@ static const pb_field_t *find_field(pb_field_t *f, int n, int field) {
     return NULL;
 }
 
+static int ksess_establish(kopia_session_t *s, char *err, size_t err_len);
+
 int ksess_connect(kopia_session_t *s, const kopia_config_t *cfg, char *err, size_t err_len) {
     memset(s, 0, sizeof(*s));
     s->cfg = *cfg;
+    return ksess_establish(s, err, err_len);
+}
 
+/* Re-establish the gRPC session after a transport failure (TLS/TCP drop).
+ * Content writes are idempotent (server dedups by content hash), so any
+ * request that was in flight when the connection died is simply re-sent. */
+int ksess_reconnect(kopia_session_t *s, char *err, size_t err_len) {
+    s->established = 0;
+    for (int i = 0; i < s->npending; i++) free(s->pending[i].msg);
+    s->npending = 0;
+    h2_close(&s->h2);
+    return ksess_establish(s, err, err_len);
+}
+
+static int ksess_establish(kopia_session_t *s, char *err, size_t err_len) {
     char host[256] = "", port[16] = "51515";
-    const char *url = cfg->server_url;
+    const char *url = s->cfg.server_url;
     if (strncmp(url, "https://", 8) == 0) url += 8;
     else if (strncmp(url, "http://", 7) == 0) url += 7;
     /* strip path, split host:port */
@@ -106,8 +123,8 @@ int ksess_connect(kopia_session_t *s, const kopia_config_t *cfg, char *err, size
     /* parse pinned fingerprint (colon-separated hex) */
     unsigned char pin[32];
     int have_pin = 0;
-    if (cfg->fingerprint[0]) {
-        const char *p = cfg->fingerprint;
+    if (s->cfg.fingerprint[0]) {
+        const char *p = s->cfg.fingerprint;
         int bi = 0;
         while (*p && bi < 32) {
             if (*p == ':') { p++; continue; }
@@ -123,14 +140,14 @@ int ksess_connect(kopia_session_t *s, const kopia_config_t *cfg, char *err, size
     }
 
     if (h2_connect(&s->h2, host, port, have_pin ? pin : NULL, err, err_len) != 0) return -1;
-    (void)cfg->insecure;
+    (void)s->cfg.insecure;
 
     /* send gRPC headers on stream 1; keep stream open */
     s->stream_id = 1;
     const char *names[8] = { "content-type", "te", "user-agent",
                              "kopia-username", "kopia-hostname", "kopia-password" };
-    const char *vals[8] = { "application/grpc", "trailers", "kopia-darwin-ppc/0.1",
-                            cfg->repo_user, cfg->repo_hostname, cfg->repo_password };
+    const char *vals[8] = { "application/grpc", "trailers", "kopia-darwin-ppc/0.2",
+                            s->cfg.repo_user, s->cfg.repo_hostname, s->cfg.repo_password };
     /* repo_user holds "user" part, repo_hostname the host part */
     if (h2_send_headers(&s->h2, GRPC_PATH, host, names, vals, 6) != 0) {
         snprintf(err, err_len, "failed to send headers");
@@ -286,9 +303,9 @@ static int next_request(kopia_session_t *s, uint64_t *request_id,
     return ksess_read_response(s, *request_id, resp, resp_len);
 }
 
-int ksess_write_content(kopia_session_t *s, const char *prefix,
-                        const unsigned char *data, size_t len,
-                        char *content_id, size_t cid_len) {
+static int ksess_write_content_once(kopia_session_t *s, const char *prefix,
+                                    const unsigned char *data, size_t len,
+                                    char *content_id, size_t cid_len) {
     if (!s->established) return -1;
     unsigned char *resp = NULL;
     size_t resp_len = 0;
@@ -352,7 +369,28 @@ int ksess_write_content(kopia_session_t *s, const char *prefix,
     return 0;
 }
 
-int ksess_flush(kopia_session_t *s) {
+/* WriteContent with reconnect+retry: a dropped TCP/TLS connection mid-run must
+ * not abort the whole backup. Chunk writes are idempotent (content-addressed,
+ * server dedups), so re-sending after reconnect is safe. */
+int ksess_write_content(kopia_session_t *s, const char *prefix,
+                        const unsigned char *data, size_t len,
+                        char *content_id, size_t cid_len) {
+    int rc = ksess_write_content_once(s, prefix, data, len, content_id, cid_len);
+    for (int attempt = 1; rc != 0 && attempt <= 2; attempt++) {
+        fprintf(stderr, "diag: write_content failed rc=%d; reconnecting (attempt %d/2)\n",
+                rc, attempt);
+        sleep(attempt);
+        char err[256] = "";
+        if (ksess_reconnect(s, err, sizeof(err)) != 0) {
+            fprintf(stderr, "diag: reconnect failed: %s\n", err);
+            continue;
+        }
+        rc = ksess_write_content_once(s, prefix, data, len, content_id, cid_len);
+    }
+    return rc;
+}
+
+static int ksess_flush_once(kopia_session_t *s) {
     if (!s->established) return -1;
     unsigned char body[16], *resp = NULL;
     size_t blen = 0, resp_len = 0;
@@ -368,9 +406,22 @@ int ksess_flush(kopia_session_t *s) {
     return 0;
 }
 
-int ksess_put_manifest(kopia_session_t *s, const char *json,
-                       const char **labels, int nlabels,
-                       char *manifest_id, size_t id_len) {
+int ksess_flush(kopia_session_t *s) {
+    int rc = ksess_flush_once(s);
+    if (rc != 0) {
+        fprintf(stderr, "diag: flush failed rc=%d; reconnecting\n", rc);
+        char err[256] = "";
+        if (ksess_reconnect(s, err, sizeof(err)) == 0)
+            rc = ksess_flush_once(s);
+        else
+            fprintf(stderr, "diag: reconnect failed: %s\n", err);
+    }
+    return rc;
+}
+
+static int ksess_put_manifest_once(kopia_session_t *s, const char *json,
+                                   const char **labels, int nlabels,
+                                   char *manifest_id, size_t id_len) {
     if (!s->established) return -1;
     unsigned char *resp = NULL;
     size_t resp_len = 0;
@@ -428,4 +479,19 @@ int ksess_put_manifest(kopia_session_t *s, const char *json,
     }
     free(resp);
     return 0;
+}
+
+int ksess_put_manifest(kopia_session_t *s, const char *json,
+                       const char **labels, int nlabels,
+                       char *manifest_id, size_t id_len) {
+    int rc = ksess_put_manifest_once(s, json, labels, nlabels, manifest_id, id_len);
+    if (rc != 0) {
+        fprintf(stderr, "diag: put_manifest failed rc=%d; reconnecting\n", rc);
+        char err[256] = "";
+        if (ksess_reconnect(s, err, sizeof(err)) == 0)
+            rc = ksess_put_manifest_once(s, json, labels, nlabels, manifest_id, id_len);
+        else
+            fprintf(stderr, "diag: reconnect failed: %s\n", err);
+    }
+    return rc;
 }

@@ -5,6 +5,7 @@
 #define _GNU_SOURCE /* fmemopen, st_mtim, gmtime_r */
 
 #include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -203,7 +204,10 @@ static int upload_stream(kopia_session_t *s, ksrc_t *src, const char *content_pr
         chunks[nchunks].oid[0] = '\0';
         int rc = ksess_write_content(s, content_prefix, cur ? cur : (const unsigned char *)"",
                                      cur_len, chunks[nchunks].oid, sizeof(chunks[nchunks].oid));
-        if (rc != 0) { free(cur); free(chunks); return -1; }
+        if (rc != 0) {
+            fprintf(stderr, "diag: final flush write failed rc=%d (%zu bytes)\n", rc, cur_len);
+            free(cur); free(chunks); return -1;
+        }
         nchunks++;
     }
     free(cur);
@@ -285,11 +289,26 @@ static int mtime_of(const char *path, char *out, size_t outlen) {
     return 0;
 }
 
-static int upload_dir_recursive(kopia_session_t *s, const char *path, char *oid, size_t oid_len);
+/* recursive tree stats — aggregated up from children so the root summary
+ * (shown by the kopia server UI) reflects the whole tree */
+typedef struct {
+    long long size;
+    long long files;
+    long long dirs;
+    char maxtime[64];
+} dir_stats_t;
+
+static long long g_skipped_files = 0, g_skipped_dirs = 0;
+
+static int upload_dir_recursive(kopia_session_t *s, const char *path, char *oid, size_t oid_len,
+                                dir_stats_t *stats);
 
 static int upload_file_entry(kopia_session_t *s, const char *fullpath, char *oid, size_t oid_len) {
     FILE *f = fopen(fullpath, "rb");
-    if (!f) return -1;
+    if (!f) {
+        fprintf(stderr, "diag: fopen failed for %s: %s\n", fullpath, strerror(errno));
+        return -1;
+    }
     ksrc_t src = {0};
     src.f = f;
     int rc = upload_stream(s, &src, "", oid, oid_len);
@@ -297,13 +316,15 @@ static int upload_file_entry(kopia_session_t *s, const char *fullpath, char *oid
     return rc;
 }
 
-static int build_dir_json(kopia_session_t *s, const char *path, char **json_out) {
+static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
+                          dir_stats_t *stats) {
     DIR *d = opendir(path);
     if (!d) {
         fprintf(stderr, "diag: opendir failed: %s\n", path);
         return -1;
     }
 
+    memset(stats, 0, sizeof(*stats));
     dir_entry_t *entries = NULL;
     int n = 0, cap = 0;
     struct dirent *de;
@@ -329,54 +350,44 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out)
             strcpy(e->type, "d");
             char suboid[256];
             mtime_of(fullpath, e->mtime, sizeof(e->mtime));
-            if (upload_dir_recursive(s, fullpath, suboid, sizeof(suboid)) != 0) {
-                fprintf(stderr, "diag: subdir failed: %s\n", fullpath);
-                closedir(d);
-                free(entries);
-                return -1;
+            dir_stats_t child;
+            if (upload_dir_recursive(s, fullpath, suboid, sizeof(suboid), &child) != 0) {
+                fprintf(stderr, "diag: skipping unreadable subdir %s\n", fullpath);
+                g_skipped_dirs++;
+                continue; /* omit from snapshot, keep walking */
             }
             snprintf(e->oid, sizeof(e->oid), "%s", suboid);
             e->size = 0;
+            stats->size += child.size;
+            stats->files += child.files;
+            stats->dirs += child.dirs + 1;
+            if (child.maxtime[0] &&
+                (stats->maxtime[0] == '\0' || strcmp(child.maxtime, stats->maxtime) > 0))
+                snprintf(stats->maxtime, sizeof(stats->maxtime), "%s", child.maxtime);
         } else if (S_ISREG(st.st_mode)) {
             strcpy(e->type, "f");
             e->size = (long long)st.st_size;
             mtime_of(fullpath, e->mtime, sizeof(e->mtime));
             if (upload_file_entry(s, fullpath, e->oid, sizeof(e->oid)) != 0) {
-                fprintf(stderr, "diag: file failed: %s\n", fullpath);
-                closedir(d);
-                free(entries);
-                return -1;
+                fprintf(stderr, "diag: skipping file %s (upload failed)\n", fullpath);
+                g_skipped_files++;
+                continue; /* omit from snapshot, keep walking */
             }
+            stats->size += e->size;
+            stats->files++;
         } else {
-            continue;
+            continue; /* special files skipped */
         }
+        if (e->mtime[0] &&
+            (stats->maxtime[0] == '\0' || strcmp(e->mtime, stats->maxtime) > 0))
+            snprintf(stats->maxtime, sizeof(stats->maxtime), "%s", e->mtime);
         n++;
     }
     closedir(d);
 
     qsort(entries, (size_t)n, sizeof(dir_entry_t), cmp_entry);
 
-    /* aggregate summary */
-    long long total_size = 0;
-    long long files = 0, dirs = 0;
-    char maxtime[64] = "";
-    for (int i = 0; i < n; i++) {
-        char fullpath[4096];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, entries[i].name);
-        struct stat st;
-        if (stat(fullpath, &st) != 0) continue;
-        if (S_ISREG(st.st_mode)) {
-            total_size += (long long)st.st_size;
-            files++;
-        } else if (S_ISDIR(st.st_mode)) {
-            dirs++;
-        }
-        char mt[64];
-        if (mtime_of(fullpath, mt, sizeof(mt)) == 0) {
-            if (maxtime[0] == '\0' || strcmp(mt, maxtime) > 0) snprintf(maxtime, sizeof(maxtime), "%s", mt);
-        }
-    }
-    if (maxtime[0] == '\0') format_mtime_rfc3339(0, 0, maxtime, sizeof(maxtime));
+    if (stats->maxtime[0] == '\0') format_mtime_rfc3339(0, 0, stats->maxtime, sizeof(stats->maxtime));
 
     /* remember summary — the outermost (root) dir finishes last */
     g_total_size = total_size;
@@ -398,8 +409,9 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out)
         sb_puts(&sb, "}");
     }
     sb_puts(&sb, "],\"summary\":{\"size\":");
-    sb_printf(&sb, "%lld", total_size);
-    sb_printf(&sb, ",\"files\":%lld,\"dirs\":%lld,\"maxTime\":\"%s\"}", files, dirs, maxtime);
+    sb_printf(&sb, "%lld", stats->size);
+    sb_printf(&sb, ",\"files\":%lld,\"dirs\":%lld,\"maxTime\":\"%s\"}",
+              stats->files, stats->dirs, stats->maxtime);
     sb_puts(&sb, "}\n");
 
     free(entries);
@@ -408,9 +420,10 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out)
     return 0;
 }
 
-static int upload_dir_recursive(kopia_session_t *s, const char *path, char *oid, size_t oid_len) {
+static int upload_dir_recursive(kopia_session_t *s, const char *path, char *oid, size_t oid_len,
+                                dir_stats_t *stats) {
     char *json = NULL;
-    if (build_dir_json(s, path, &json) != 0) {
+    if (build_dir_json(s, path, &json, stats) != 0) {
         fprintf(stderr, "diag: build_dir_json failed for %s\n", path);
         return -1;
     }
@@ -426,9 +439,24 @@ static int upload_dir_recursive(kopia_session_t *s, const char *path, char *oid,
 
 int kup_upload_path(kopia_session_t *s, const char *path, char *object_id, size_t oid_len) {
     struct stat st;
-    if (stat(path, &st) != 0) return -1;
+    if (stat(path, &st) != 0) {
+        fprintf(stderr, "diag: stat failed for %s: %s\n", path, strerror(errno));
+        return -1;
+    }
     if (S_ISDIR(st.st_mode)) {
-        return upload_dir_recursive(s, path, object_id, oid_len);
+        dir_stats_t stats;
+        int rc = upload_dir_recursive(s, path, object_id, oid_len, &stats);
+        if (rc == 0) {
+            /* root summary feeds the snapshot manifest */
+            g_total_size = stats.size;
+            g_files = stats.files;
+            g_dirs = stats.dirs;
+            snprintf(g_maxtime, sizeof(g_maxtime), "%s", stats.maxtime);
+            if (g_skipped_files || g_skipped_dirs)
+                fprintf(stderr, "diag: completed with %lld skipped files, %lld skipped dirs\n",
+                        g_skipped_files, g_skipped_dirs);
+        }
+        return rc;
     }
     return upload_file_entry(s, path, object_id, oid_len);
 }
