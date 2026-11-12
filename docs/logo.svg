@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- one object, chunked: min/avg/max chunks, accent on the largest -->
+  <rect x="8" y="8" width="16" height="48" rx="6" fill="#24272b"/>
+  <rect x="28" y="8" width="28" height="16" rx="6" fill="#24272b"/>
+  <rect x="28" y="28" width="28" height="28" rx="6" fill="#2c5a8a"/>
+</svg>

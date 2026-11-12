@@ -1,5 +1,7 @@
 # kopia-darwin-ppc
 
+<p align="center"><img src="docs/logo.svg" width="96" alt="kopia-darwin-ppc — one object, chunked"></p>
+
 A native **kopia backup client for old PowerPC Macs** (Mac OS X 10.4 Tiger / 10.5 Leopard, G4/G5).
 
 Kopia itself cannot run on these machines (Go does not support `darwin/ppc`, and Leopard's

@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kopia-darwin-ppc — native kopia client for PowerPC Macs</title>
 <meta name="description" content="A native kopia backup client for Mac OS X 10.4/10.5 PowerPC (G4/G5). Speaks the kopia repository server protocol in about 1500 lines of C99.">
+<link rel="icon" type="image/svg+xml" href="logo-tile.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <style>
   :root {
     --bg: #f2f1ef;
@@ -40,7 +43,8 @@
     display: flex; align-items: center; justify-content: space-between;
     padding: 20px 0;
   }
-  .brand { font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: none; letter-spacing: -0.01em; }
+  .brand { font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: none; letter-spacing: -0.01em; display: inline-flex; align-items: center; gap: 8px; }
+  .brand .mark { flex: none; }
   .brand .hex { color: var(--text-3); font-weight: 400; }
   nav .links { display: flex; gap: 24px; align-items: center; }
   nav .links a { color: var(--text-2); text-decoration: none; font-size: 14px; }
@@ -152,7 +156,7 @@
 <div class="wrap">
 
   <nav>
-    <a class="brand" href="#">kopia-darwin-ppc <span class="hex mono">/ ppc</span></a>
+    <a class="brand" href="#"><svg class="mark" width="18" height="18" viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="8" width="16" height="48" rx="6" fill="#24272b"/><rect x="28" y="8" width="28" height="16" rx="6" fill="#24272b"/><rect x="28" y="28" width="28" height="28" rx="6" fill="#2c5a8a"/></svg>kopia-darwin-ppc <span class="hex mono">/ ppc</span></a>
     <div class="links">
       <a href="#how">How it works</a>
       <a href="#quickstart">Quick start</a>
