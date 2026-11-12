@@ -389,12 +389,6 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
 
     if (stats->maxtime[0] == '\0') format_mtime_rfc3339(0, 0, stats->maxtime, sizeof(stats->maxtime));
 
-    /* remember summary — the outermost (root) dir finishes last */
-    g_total_size = total_size;
-    g_files = files;
-    g_dirs = dirs;
-    snprintf(g_maxtime, sizeof(g_maxtime), "%s", maxtime);
-
     strbuf_t sb;
     sb_init(&sb);
     sb_puts(&sb, "{\"stream\":\"kopia:directory\",\"entries\":[");
