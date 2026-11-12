@@ -146,7 +146,7 @@ static int ksess_establish(kopia_session_t *s, char *err, size_t err_len) {
     s->stream_id = 1;
     const char *names[8] = { "content-type", "te", "user-agent",
                              "kopia-username", "kopia-hostname", "kopia-password" };
-    const char *vals[8] = { "application/grpc", "trailers", "kopia-darwin-ppc/0.2",
+    const char *vals[8] = { "application/grpc", "trailers", "kopia-darwin-ppc/0.3",
                             s->cfg.repo_user, s->cfg.repo_hostname, s->cfg.repo_password };
     /* repo_user holds "user" part, repo_hostname the host part */
     if (h2_send_headers(&s->h2, GRPC_PATH, host, names, vals, 6) != 0) {
