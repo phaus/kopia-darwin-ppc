@@ -36,7 +36,7 @@ What the client implements:
   object ID = `I<content-id>`);
 - snapshot manifests (labels `type=snapshot`, `hostname`, `username`, `path`);
 - HTTP/2 framing with HPACK (RFC 7541, incl. Huffman decoding), flow control and
-  gRPC message framing — all hand-rolled, ~1500 lines of C99.
+  gRPC message framing — all hand-rolled, ~1900 lines of C99.
 
 The full wire-protocol specification (extracted from the kopia source, with exact
 message formats and file references) is in [`docs/kopia-protocol.md`](docs/kopia-protocol.md).
