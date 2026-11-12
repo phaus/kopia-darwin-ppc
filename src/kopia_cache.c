@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h> /* unlink */
 
 #define KCACHE_MAGIC "KPPC1"
@@ -110,14 +111,11 @@ static unsigned long long fnv1a64_buf(const unsigned char *s, size_t n) {
 
 /* ---- identity + paths ---- */
 
-static void cache_paths(const kopia_config_t *cfg, const char *source_real,
-                        char *stem, size_t stem_len) {
+static unsigned long long fnv1a64_key(const kopia_config_t *cfg, const char *source_real) {
     char key[1600];
     snprintf(key, sizeof(key), "%s|%s|%s|%s",
              cfg->server_url, cfg->repo_user, cfg->repo_hostname, source_real);
-    snprintf(stem, stem_len, "%s/cache-%016llx",
-             getenv("KOPIA_CACHE_DIR") ? getenv("KOPIA_CACHE_DIR") : "/var/db/kopia-darwin-ppc",
-             fnv1a64(key));
+    return fnv1a64(key);
 }
 
 /* ---- previous-run map: hash table over relpath ---- */
@@ -295,8 +293,13 @@ static int load_cache_file(const char *path, const kopia_config_t *cfg,
 int kcache_begin(const kopia_config_t *cfg, const char *source_real) {
     cache_reset(); /* fresh table per run (also clears a failed previous load) */
 
+    const char *dir = getenv("KOPIA_CACHE_DIR");
+    if (!dir) dir = "/var/db/kopia-darwin-ppc";
+    mkdir(dir, 0755); /* ok if it exists; failure surfaces at fopen */
+
     char stem[1024];
-    cache_paths(cfg, source_real, stem, sizeof(stem));
+    snprintf(stem, sizeof(stem), "%s/cache-%016llx", dir,
+             fnv1a64_key(cfg, source_real));
     snprintf(g_final_path, sizeof(g_final_path), "%s.dat", stem);
     snprintf(g_tmp_path, sizeof(g_tmp_path), "%s.tmp", stem);
 
