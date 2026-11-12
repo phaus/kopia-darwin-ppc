@@ -135,6 +135,8 @@ On Leopard, `/usr/bin/cron` is launched by launchd by default — no extra servi
   `DYNAMIC-4M-BUZHASH`) and adapts
 - single-file and directory-tree backups from a PowerPC G4 (Mac mini, 10.5.8)
 - multi-chunk files (20 MB → 6-chunk indirect object)
+- symlink round-trips (valid/absolute/dangling/relative/to-dir/2000-char/UTF-8-dir)
+  — see `tests/symlink-roundtrip.sh`
 - snapshots listed by the standard `kopia snapshot list --all`, restores via
   `kopia restore` are byte-identical
 - certificate fingerprint pinning enforced (wrong fingerprint rejected)
@@ -144,7 +146,9 @@ On Leopard, `/usr/bin/cron` is launched by launchd by default — no extra servi
 - no incremental *transfer* yet — every run re-reads and re-sends all files
   (server-side dedup still avoids duplicate storage, and unchanged large contents
   are skipped server-side, but data is re-transferred)
-- symlinks and special files are skipped
+- special files (FIFOs, sockets, devices) are skipped — logged with their path
+  and counted in the run summary (kopia itself doesn't back them up either);
+  symlinks *are* backed up since v0.3 (type `"s"`, dangling links included)
 - `compress_level` / encryption fields of the local CAS repo are placeholders
 - local CAS `add` has no directory recursion
 - ppc64 binary builds but is untested (no G5 available)
