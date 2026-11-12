@@ -144,10 +144,26 @@
   footer a { color: var(--accent); text-decoration: none; }
   footer a:hover { color: var(--ink); }
 
+  /* ---------- comparison tables ---------- */
+  .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 32px; align-items: start; }
+  .cmp h3 { font-size: 14px; font-weight: 500; color: var(--text-2); margin-bottom: 12px; }
+  table.ver { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.ver th, table.ver td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--hairline); }
+  table.ver th { font-weight: 500; color: var(--text-3); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+  table.ver td { color: var(--text-2); }
+  table.ver td.feat { color: var(--ink); }
+  table.ver td.m, table.ver th.m { text-align: center; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  table.ver td.yes { color: var(--ink); }
+  table.ver td.no { color: var(--text-3); }
+  table.ver td.cur, table.ver th.cur { background: rgba(44, 90, 138, 0.06); }
+  table.ver .num { font-variant-numeric: tabular-nums; }
+  .cmp-note { margin-top: 12px; font-size: 12.5px; color: var(--text-3); }
+
   @media (max-width: 880px) {
     .hero { grid-template-columns: 1fr; gap: 40px; padding: 56px 0 64px; }
     .cols { grid-template-columns: 1fr; }
     .stats { grid-template-columns: 1fr; }
+    .cmp { grid-template-columns: 1fr; }
     section { padding: 56px 0; }
   }
 </style>
@@ -160,6 +176,7 @@
     <div class="links">
       <a href="#how">How it works</a>
       <a href="#quickstart">Quick start</a>
+      <a href="#versions">Versions</a>
       <a href="https://github.com/phaus/kopia-darwin-ppc">GitHub</a>
     </div>
   </nav>
@@ -243,8 +260,8 @@ object: kcd8ba6c2e3cd44c005951e41c1c2f9cd
       </div>
       <div class="stat">
         <div class="label">Wall time on the G4</div>
-        <div class="value">29 min</div>
-        <div class="note">full run · unchanged-tree runs skip the transfer (~walk time)</div>
+        <div class="value">1 h 14</div>
+        <div class="note">v0.4 full run of 586 MB · v0.5 skips unchanged data entirely</div>
       </div>
       <div class="stat">
         <div class="label">Restore fidelity</div>
@@ -304,6 +321,40 @@ kopia server acl add --user root@my-g4 --target type=policy --access FULL</pre>
       <li><b>The ppc64 (G5) binary builds but is untested</b> — no G5 in the fleet. Reports welcome.</li>
       <li><b>The local CAS mode is minimal</b> — flat manifest index, no recursion in <code>add</code>, compression fields are placeholders.</li>
     </ul>
+  </section>
+
+  <!-- versions -->
+  <section id="versions">
+    <p class="kicker">§ 05 / version history</p>
+    <h2>Four releases, measured on the same machine</h2>
+    <div class="cmp">
+      <div>
+        <h3>Capabilities</h3>
+        <table class="ver">
+          <tr><th class="feat"></th><th class="m">v0.2</th><th class="m">v0.3</th><th class="m">v0.4</th><th class="m cur">v0.5</th></tr>
+          <tr><td class="feat">Push files &amp; dirs, server-side crypto</td><td class="m yes">✓</td><td class="m yes">✓</td><td class="m yes">✓</td><td class="m yes cur">✓</td></tr>
+          <tr><td class="feat">TLS reconnect &amp; retry, cert pinning</td><td class="m yes">✓</td><td class="m yes">✓</td><td class="m yes">✓</td><td class="m yes cur">✓</td></tr>
+          <tr><td class="feat">Skip-on-error walker, recursive summary</td><td class="m yes">✓</td><td class="m yes">✓</td><td class="m yes">✓</td><td class="m yes cur">✓</td></tr>
+          <tr><td class="feat">Symlinks backed up (dangling incl.)</td><td class="m no">—</td><td class="m yes">✓</td><td class="m yes">✓</td><td class="m yes cur">✓</td></tr>
+          <tr><td class="feat">Ignore rules (pruned subtrees)</td><td class="m no">—</td><td class="m no">—</td><td class="m yes">✓</td><td class="m yes cur">✓</td></tr>
+          <tr><td class="feat">--password-file / KOPIA_PASSWORD</td><td class="m no">—</td><td class="m no">—</td><td class="m yes">✓</td><td class="m yes cur">✓</td></tr>
+          <tr><td class="feat">Incremental transfer (unchanged skipped)</td><td class="m no">—</td><td class="m no">—</td><td class="m no">—</td><td class="m yes cur">✓</td></tr>
+        </table>
+      </div>
+      <div>
+        <h3>Wall time, production runs on the G4</h3>
+        <table class="ver">
+          <tr><th class="feat">client / tree</th><th class="m">sent</th><th class="m">time</th></tr>
+          <tr><td class="feat">v0.3 · 199,876 files · 1.2 GB</td><td class="m num">1.2 GB</td><td class="m num">2 h 37–52 min</td></tr>
+          <tr><td class="feat">v0.4 · 96,459 files · 586 MB</td><td class="m num">586 MB</td><td class="m num">1 h 14–29 min</td></tr>
+          <tr><td class="feat">v0.5 · same tree, unchanged</td><td class="m num">~0 B</td><td class="m num">walk only</td></tr>
+          <tr><td class="feat">v0.5 · changed files only</td><td class="m num">delta</td><td class="m num">walk + delta</td></tr>
+        </table>
+        <p class="cmp-note">v0.3 ran without ignore rules — the tree carried ~100k cache files and ~600 MB of
+        <code>Library/Caches</code>. v0.5 timings for the production source land with the next cron runs; on the
+        test tree an unchanged re-push reuses everything and produces the identical object id.</p>
+      </div>
+    </div>
   </section>
 
   <footer>
