@@ -200,16 +200,16 @@
 
     <div class="terminal" role="img" aria-label="Terminal showing a real backup run from a PowerPC G4">
       <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="title">macmini-g4-1 — kopia-push</span></div>
-<pre><span class="cmt"># the real thing, on the real machine</span>
+<pre><span class="cmt"># the real thing, on the real machine — /usr/local/bin/kopia-push</span>
 $ /usr/local/bin/kopia-darwin-ppc kopia-push \
     --url https://kopia.lan:51515 \
     --user root --hostname macmini-g4-1 <span class="dim">--password-file …</span> \
     --fingerprint b1:53:…:a3 /Users/philipp
 
 connected: hash=BLAKE2B-256-128 splitter=DYNAMIC-4M-BUZHASH
-diag: completed with 0 skipped files, 0 skipped dirs, 1 skipped special files
-object: kcd8ba6c2e3cd44c005951e41c1c2f9cd
-<span class="hi">snapshot: cc1232e8cf438c7a833e0f8d537bc30a</span></pre>
+diag: ignored 0 files, 5597 dirs by ignore rules
+object: kbfd525f3b4bbf9803c6f3d47abd5947b
+<span class="hi">snapshot: b6642064d8d9d48afca576eaea4d966f</span></pre>
     </div>
   </header>
 
