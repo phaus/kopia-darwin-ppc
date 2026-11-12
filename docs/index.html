@@ -20,6 +20,7 @@
     --term-accent: #9fc3e8;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  a, .btn { transition: color 150ms cubic-bezier(0.22, 1, 0.36, 1), background-color 150ms cubic-bezier(0.22, 1, 0.36, 1); }
   html { scroll-behavior: smooth; }
   body {
     background: var(--bg);
@@ -31,7 +32,7 @@
 
   /* ---------- shell ---------- */
   .wrap { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
-  section { padding: 72px 0; border-top: 1px solid var(--hairline); }
+  section { padding: 96px 0; border-top: 1px solid var(--hairline); }
   section:first-of-type { border-top: none; }
 
   /* ---------- nav ---------- */
@@ -46,17 +47,17 @@
   nav .links a:hover { color: var(--ink); }
 
   /* ---------- hero ---------- */
-  .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 56px; align-items: center; padding: 88px 0 96px; }
+  .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 56px; align-items: center; padding: 112px 0 104px; }
   h1 {
-    font-size: clamp(34px, 4.4vw, 50px);
-    line-height: 1.12; letter-spacing: -0.02em; font-weight: 600;
+    font-size: clamp(36px, 4.8vw, 56px);
+    line-height: 1.06; letter-spacing: -0.025em; font-weight: 500;
   }
   .hero p.lead {
-    margin-top: 20px; font-size: 17px; color: var(--text-2); max-width: 46ch;
+    margin-top: 20px; font-size: 18px; line-height: 1.55; color: var(--text-2); max-width: 46ch;
   }
   .hero .actions { margin-top: 32px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
   .btn {
-    display: inline-block; padding: 10px 20px; border-radius: 8px;
+    display: inline-block; padding: 12px 20px; border-radius: 8px;
     background: var(--ink); color: var(--bg); text-decoration: none;
     font-size: 14px; font-weight: 500;
   }
@@ -91,7 +92,7 @@
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 12.5px; color: var(--text-3); margin-bottom: 12px;
   }
-  h2 { font-size: 24px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.3; }
+  h2 { font-size: 24px; font-weight: 500; letter-spacing: -0.015em; line-height: 1.3; }
   .prose { max-width: 68ch; margin-top: 16px; color: var(--text-2); }
   .prose strong { color: var(--ink); font-weight: 500; }
   .prose code, .cols code {
@@ -110,7 +111,7 @@
   }
   .stat .label { font-size: 13px; color: var(--text-3); }
   .stat .value {
-    margin-top: 6px; font-size: 26px; font-weight: 600; letter-spacing: -0.01em;
+    margin-top: 6px; font-size: 28px; font-weight: 500; letter-spacing: -0.01em;
     font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   .stat .note { margin-top: 2px; font-size: 12.5px; color: var(--text-3); }
