@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kopia-darwin-ppc — native kopia client for PowerPC Macs</title>
+<meta name="description" content="A native kopia backup client for Mac OS X 10.4/10.5 PowerPC (G4/G5). Speaks the kopia repository server protocol in about 1500 lines of C99.">
+<style>
+  :root {
+    --bg: #f2f1ef;
+    --surface: #faf9f8;
+    --ink: #24272b;
+    --text-2: #565b61;
+    --text-3: #8a8f94;
+    --hairline: rgba(36, 39, 43, 0.09);
+    --accent: #2c5a8a;
+    --term-bg: #1b1d20;
+    --term-text: #b9c0c7;
+    --term-muted: #6e747a;
+    --term-accent: #9fc3e8;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  /* ---------- shell ---------- */
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+  section { padding: 72px 0; border-top: 1px solid var(--hairline); }
+  section:first-of-type { border-top: none; }
+
+  /* ---------- nav ---------- */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 0;
+  }
+  .brand { font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: none; letter-spacing: -0.01em; }
+  .brand .hex { color: var(--text-3); font-weight: 400; }
+  nav .links { display: flex; gap: 24px; align-items: center; }
+  nav .links a { color: var(--text-2); text-decoration: none; font-size: 14px; }
+  nav .links a:hover { color: var(--ink); }
+
+  /* ---------- hero ---------- */
+  .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 56px; align-items: center; padding: 88px 0 96px; }
+  h1 {
+    font-size: clamp(34px, 4.4vw, 50px);
+    line-height: 1.12; letter-spacing: -0.02em; font-weight: 600;
+  }
+  .hero p.lead {
+    margin-top: 20px; font-size: 17px; color: var(--text-2); max-width: 46ch;
+  }
+  .hero .actions { margin-top: 32px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 10px 20px; border-radius: 8px;
+    background: var(--ink); color: var(--bg); text-decoration: none;
+    font-size: 14px; font-weight: 500;
+  }
+  .btn:hover { background: #3a3e43; }
+  .btn-quiet { color: var(--accent); background: none; padding: 10px 4px; }
+  .btn-quiet:hover { color: var(--ink); }
+  .meta-line { margin-top: 20px; font-size: 13px; color: var(--text-3); }
+
+  /* ---------- terminal (the one bright element) ---------- */
+  .terminal {
+    background: var(--term-bg); border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(20,22,25,.18), 0 12px 32px rgba(20,22,25,.10);
+    overflow: hidden;
+  }
+  .terminal .bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,.06);
+  }
+  .terminal .bar .dot { width: 11px; height: 11px; border-radius: 50%; background: #3d4249; }
+  .terminal .bar .title { font-size: 12px; color: var(--term-muted); margin-left: 6px; }
+  .terminal pre {
+    padding: 20px 20px 24px; font-size: 12.5px; line-height: 1.75;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: var(--term-text); overflow-x: auto;
+  }
+  .terminal .cmt { color: var(--term-muted); }
+  .terminal .dim { color: var(--term-muted); }
+  .terminal .hi { color: var(--term-accent); }
+
+  /* ---------- sections ---------- */
+  .kicker {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px; color: var(--text-3); margin-bottom: 12px;
+  }
+  h2 { font-size: 24px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.3; }
+  .prose { max-width: 68ch; margin-top: 16px; color: var(--text-2); }
+  .prose strong { color: var(--ink); font-weight: 500; }
+  .prose code, .cols code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em; background: rgba(36,39,43,.06); padding: 1px 5px; border-radius: 4px;
+  }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 8px; }
+  .cols .prose { margin-top: 0; }
+
+  /* ---------- stats ---------- */
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 32px; }
+  .stat {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 20px 24px;
+  }
+  .stat .label { font-size: 13px; color: var(--text-3); }
+  .stat .value {
+    margin-top: 6px; font-size: 26px; font-weight: 600; letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  .stat .note { margin-top: 2px; font-size: 12.5px; color: var(--text-3); }
+
+  /* ---------- code blocks ---------- */
+  pre.block {
+    background: var(--term-bg); color: var(--term-text); border-radius: 10px;
+    padding: 18px 20px; font-size: 12.5px; line-height: 1.7; overflow-x: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    margin-top: 20px;
+  }
+  pre.block .cmt { color: var(--term-muted); }
+
+  /* ---------- list ---------- */
+  ul.plain { margin: 16px 0 0 0; padding: 0; list-style: none; max-width: 72ch; }
+  ul.plain li { padding: 8px 0; border-bottom: 1px solid var(--hairline); color: var(--text-2); font-size: 15px; }
+  ul.plain li:last-child { border-bottom: none; }
+  ul.plain li b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- footer ---------- */
+  footer {
+    border-top: 1px solid var(--hairline); padding: 32px 0 40px;
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    font-size: 13px; color: var(--text-3);
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { color: var(--ink); }
+
+  @media (max-width: 880px) {
+    .hero { grid-template-columns: 1fr; gap: 40px; padding: 56px 0 64px; }
+    .cols { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: 1fr; }
+    section { padding: 56px 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <nav>
+    <a class="brand" href="#">kopia-darwin-ppc <span class="hex mono">/ ppc</span></a>
+    <div class="links">
+      <a href="#how">How it works</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="https://github.com/phaus/kopia-darwin-ppc">GitHub</a>
+    </div>
+  </nav>
+
+  <!-- hero: text left, real terminal right -->
+  <header class="hero">
+    <div>
+      <h1>Native kopia client<br>for PowerPC Macs</h1>
+      <p class="lead">
+        Backups with <strong>kopia</strong> on Mac OS X 10.4 and 10.5 — a thin client that
+        speaks the kopia repository server protocol in about 1500 lines of C99.
+        No Go, no modern TLS stack, no MacPorts.
+      </p>
+      <div class="actions">
+        <a class="btn" href="https://github.com/phaus/kopia-darwin-ppc/releases/tag/v0.3.0">Download v0.3.0</a>
+        <a class="btn btn-quiet" href="https://github.com/phaus/kopia-darwin-ppc">View on GitHub</a>
+      </div>
+      <p class="meta-line mono">Tested against kopia 0.23.1 · Mac mini G4 · 10.5.8</p>
+    </div>
+
+    <div class="terminal" role="img" aria-label="Terminal showing a real backup run from a PowerPC G4">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="title">macmini-g4-1 — kopia-push</span></div>
+<pre><span class="cmt"># the real thing, on the real machine</span>
+$ /usr/local/bin/kopia-darwin-ppc kopia-push \
+    --url https://kopia.lan:51515 \
+    --user root --hostname macmini-g4-1 <span class="dim">--password …</span> \
+    --fingerprint b1:53:…:a3 /Users/philipp
+
+connected: hash=BLAKE2B-256-128 splitter=DYNAMIC-4M-BUZHASH
+diag: completed with 0 skipped files, 0 skipped dirs, 1 skipped special files
+object: kcd8ba6c2e3cd44c005951e41c1c2f9cd
+<span class="hi">snapshot: cc1232e8cf438c7a833e0f8d537bc30a</span></pre>
+    </div>
+  </header>
+
+  <!-- why -->
+  <section id="why">
+    <p class="kicker">§ 01 / why this exists</p>
+    <h2>Kopia can&rsquo;t run here. The protocol can.</h2>
+    <div class="cols">
+      <p class="prose">
+        Kopia is written in <strong>Go</strong> — and Go has no <code>darwin/ppc</code> target.
+        Leopard&rsquo;s system OpenSSL is 0.9.7, which speaks TLS&nbsp;1.0, and that conversation
+        is over in 2026. So the usual &ldquo;just install it&rdquo; path ends at a dead end
+        on a G4 or G5.
+      </p>
+      <p class="prose">
+        This client doesn&rsquo;t need either. It implements the
+        <strong>repository server protocol</strong> directly — one gRPC session over
+        HTTP/2, HPACK by hand, <strong>mbedTLS</strong> statically linked, the server
+        certificate pinned by SHA-256. The server does the crypto; the client ships chunks.
+      </p>
+    </div>
+  </section>
+
+  <!-- how -->
+  <section id="how">
+    <p class="kicker">§ 02 / how it works</p>
+    <h2>The server carries the weight</h2>
+    <div class="cols">
+      <p class="prose">
+        Files are chunked locally with <strong>buzhash32</strong>, matching kopia&rsquo;s
+        <code>DYNAMIC-4M-BUZHASH</code> splitter (2&nbsp;MB min, 4&nbsp;MB avg, 8&nbsp;MB max).
+        Chunks travel as plaintext; the <strong>server</strong> encrypts them with
+        AES-256-GCM, computes content IDs and packs the index.
+      </p>
+      <p class="prose">
+        Directory objects, multi-chunk indirect objects and snapshot manifests are
+        written in kopia&rsquo;s exact JSON formats — restores with the stock
+        <code>kopia restore</code> are byte-identical. The full wire specification
+        lives in <code>docs/kopia-protocol.md</code>.
+      </p>
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="label">Real run, one pass</div>
+        <div class="value">199,876</div>
+        <div class="note">files · 49,512 dirs · 1.2 GB — /Users/philipp</div>
+      </div>
+      <div class="stat">
+        <div class="label">Wall time on the G4</div>
+        <div class="value">2 h 44 min</div>
+        <div class="note">full re-read + re-send, 1 core, 1 GB RAM</div>
+      </div>
+      <div class="stat">
+        <div class="label">Restore fidelity</div>
+        <div class="value">byte-exact</div>
+        <div class="note">incl. empty files, symlinks, UTF-8 names</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- quickstart -->
+  <section id="quickstart">
+    <p class="kicker">§ 03 / quick start</p>
+    <h2>Register once, then cron it</h2>
+    <div class="cols">
+      <div>
+        <p class="prose"><strong>On the kopia server</strong> — register the client as a
+        server user and grant it access (ACLs apply to content, snapshots and policies):</p>
+<pre class="block"><span class="cmt"># inside the kopia server container</span>
+kopia server user add root@my-g4 --user-password SECRET
+kopia server acl add --user root@my-g4 --target type=content --access FULL
+kopia server acl add --user root@my-g4 --target type=snapshot --access FULL
+kopia server acl add --user root@my-g4 --target type=policy --access FULL</pre>
+      </div>
+      <div>
+        <p class="prose"><strong>On the PowerPC Mac</strong> — push a path; it uploads and
+        creates a snapshot. Wrap it in a root-owned script and schedule it:</p>
+<pre class="block"><span class="cmt"># /usr/local/bin/kopia-cron (mode 700)</span>
+/usr/local/bin/kopia-darwin-ppc kopia-push \
+  --url https://kopia.example.com:51515 \
+  --user root --hostname my-g4 \
+  --password SECRET \
+  --fingerprint XX:XX:…:XX \
+  /Users/youruser
+
+<span class="cmt"># root crontab</span>
+17 */4 * * * /usr/local/bin/kopia-cron</pre>
+      </div>
+    </div>
+    <p class="prose" style="margin-top:20px">
+      Verify from any machine with the stock CLI:
+      <code>kopia snapshot list --all</code> ·
+      <code>kopia restore &lt;snapshot-id&gt; /dest</code> —
+      no special tooling on the restore side. Full setup notes in the
+      <a href="https://github.com/phaus/kopia-darwin-ppc#readme" style="color:var(--accent)">README</a>.
+    </p>
+  </section>
+
+  <!-- limits -->
+  <section id="limits">
+    <p class="kicker">§ 04 / honest limits</p>
+    <h2>What it does not do (yet)</h2>
+    <ul class="plain">
+      <li><b>No incremental transfer</b> — every run re-reads and re-sends the full tree. Server-side dedup keeps storage flat, but the wire and the walk repeat. The next thing on the list.</li>
+      <li><b>FIFOs, sockets, devices are skipped</b> — logged and counted per run. Kopia itself doesn&rsquo;t back them up either. Symlinks <em>are</em> backed up, dangling ones included.</li>
+      <li><b>The ppc64 (G5) binary builds but is untested</b> — no G5 in the fleet. Reports welcome.</li>
+      <li><b>The local CAS mode is minimal</b> — flat manifest index, no recursion in <code>add</code>, compression fields are placeholders.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <div class="mono">kopia-darwin-ppc · Apache-2.0 · wire spec derived from the kopia source</div>
+    <div><a href="https://github.com/phaus/kopia-darwin-ppc">github.com/phaus/kopia-darwin-ppc</a></div>
+  </footer>
+
+</div>
+</body>
+</html>
