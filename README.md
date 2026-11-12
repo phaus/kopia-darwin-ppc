@@ -116,6 +116,37 @@ rules also shorten the run, not just the snapshot. As in git, a file cannot be
 re-included under a directory that is itself excluded. `.kopiaignore` files
 themselves are data and are included in the snapshot.
 
+### Incremental transfer (v0.5)
+
+Every run still walks the whole tree, but unchanged data is no longer
+*transferred*. After a successful push the client stores a cache file (under
+`/var/db/kopia-darwin-ppc`, override with `KOPIA_CACHE_DIR`) recording, per
+directory: each file's name/size/mtime/object-id and the directory object id
+plus the SHA-256 of its JSON.
+
+On the next run:
+
+- a file whose size + mtime match the cache is **not read, chunked or
+  uploaded** — the previous object id is reused (it is content-addressed and
+  still referenced by the retained snapshots)
+- a directory whose rebuilt JSON hashes to the cached value reuses the
+  previous **directory object id** — unchanged subtrees are skipped entirely
+
+A full-tree run therefore drops to walk time + changed data (on the G4:
+~2¾ h → ~20–30 min when little changed). No local index database: one binary
+file per source, written atomically after success. A missing, corrupt or
+foreign-identity cache (different server/user/hostname/source) is ignored and
+the run is a full push.
+
+Notes:
+
+- the cache is keyed on the server URL, repository user, hostname and resolved
+  source path — moving the source or repointing it at another repo starts a
+  fresh cache automatically
+- after **deleting all snapshots of a source or recreating the repository**,
+  delete the cache directory on the client (`rm -rf /var/db/kopia-darwin-ppc`);
+  otherwise the next push may reference objects that no longer exist
+
 ### Server-side setup (one-time)
 
 ```bash
@@ -181,9 +212,9 @@ On Leopard, `/usr/bin/cron` is launched by launchd by default — no extra servi
 - ignore rules cover the common gitignore subset (see "Ignoring files"); no
   per-directory `.kopiaignore` files below the source root, no `[a-z]` classes
   and no backslash escapes
-- no incremental *transfer* yet — every run re-reads and re-sends all files
-  (server-side dedup still avoids duplicate storage, and unchanged large contents
-  are skipped server-side, but data is re-transferred)
+- the incremental cache detects changes by size + mtime only — a file modified
+  in place *without* its mtime changing is not re-uploaded (same tradeoff
+  kopia itself makes)
 - special files (FIFOs, sockets, devices) are skipped — logged with their path
   and counted in the run summary (kopia itself doesn't back them up either);
   symlinks *are* backed up since v0.3 (type `"s"`, dangling links included)

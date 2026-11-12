@@ -6,6 +6,7 @@
 #include <mbedtls/sha256.h>
 #include <mbedtls/ssl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* RNG from /dev/urandom — works on Leopard (no entropy collector needed). */

@@ -168,6 +168,7 @@ static int read_str(const unsigned char *buf, size_t len, size_t *pos,
         size_t cap = v * 2 + 16;
         unsigned char *dec = malloc(cap);
         if (huff_decode(buf + p, v, dec, cap, out_len) != 0) { free(dec); return -1; }
+        dec[*out_len] = '\0'; /* hpack strings are treated as C strings */
         *out = dec;
     } else {
         unsigned char *raw = malloc(v + 1);

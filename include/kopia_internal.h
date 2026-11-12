@@ -12,6 +12,16 @@
 
 #include "kopia.h"
 
+/* ---- directory entry (kopia_upload.c walker, kopia_cache.c records) ---- */
+typedef struct {
+    char name[512];
+    char type[2];   /* "f","d","s" */
+    int  mode;
+    long long size;
+    char mtime[64]; /* RFC3339, fixed width */
+    char oid[256];
+} dir_entry_t;
+
 /* ---- transport (kopia_tls.c, mbedTLS) ---- */
 typedef struct {
     void *ssl_ctx;   /* mbedtls_ssl_context* */

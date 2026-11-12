@@ -1,6 +1,7 @@
 #include "backup.h"
 #include "kopia.h"
 #include "kopia_internal.h"
+#include "kopia_cache.h"
 #include "kopia_ignore.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -109,6 +110,9 @@ static int cmd_kopia_push(int argc, char **argv) {
         fprintf(stderr, "final flush failed\n");
         return 1;
     }
+
+    /* everything uploaded + snapshotted: promote the incremental cache */
+    kcache_commit();
 
     ksess_close(&s);
     return 0;

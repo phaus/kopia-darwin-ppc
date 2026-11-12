@@ -14,8 +14,10 @@
 #include <unistd.h> /* readlink */
 
 #include "kopia_internal.h"
+#include "kopia_cache.h"
 #include "kopia_ignore.h"
 #include "kopia_json.h"
+#include "kopia_sha256.h"
 
 #define SPLITTER_WINDOW 64
 #define SPLITTER_MIN (2u << 20)
@@ -247,15 +249,6 @@ static int upload_stream(kopia_session_t *s, ksrc_t *src, const char *content_pr
 
 /* ---- directory upload ---- */
 
-typedef struct {
-    char name[512];
-    char type[2];   /* "f","d" */
-    int  mode;
-    long long size;
-    char mtime[64];
-    char oid[256];
-} dir_entry_t;
-
 static void format_mtime_rfc3339(long long epoch_s, long nsec, char *out, size_t outlen) {
     time_t t = (time_t)epoch_s;
     struct tm g;
@@ -304,10 +297,21 @@ typedef struct {
 
 static long long g_skipped_files = 0, g_skipped_dirs = 0, g_skipped_special = 0;
 static long long g_ignored_files = 0, g_ignored_dirs = 0;
+static long long g_reused_files = 0, g_reused_dirs = 0;
 
 /* source root for relative ignore paths (realpath'd, no trailing slash) */
 static char    g_ignore_root[4096] = "";
 static size_t  g_ignore_root_len = 0;
+
+/* path relative to the source root ("" at the root itself), or the full path
+ * if it lies outside the root */
+static const char *rel_below_root(const char *fullpath) {
+    if (g_ignore_root_len &&
+        strncmp(fullpath, g_ignore_root, g_ignore_root_len) == 0 &&
+        fullpath[g_ignore_root_len] == '/')
+        return fullpath + g_ignore_root_len + 1;
+    return fullpath;
+}
 
 static int upload_dir_recursive(kopia_session_t *s, const char *path, char *oid, size_t oid_len,
                                 dir_stats_t *stats);
@@ -326,7 +330,9 @@ static int upload_file_entry(kopia_session_t *s, const char *fullpath, char *oid
 }
 
 static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
-                          dir_stats_t *stats) {
+                          dir_stats_t *stats, dir_entry_t **entries_out, int *n_out,
+                          unsigned char json_sha[32]) {
+    const char *dir_rel = rel_below_root(path);
     DIR *d = opendir(path);
     if (!d) {
         fprintf(stderr, "diag: opendir failed: %s\n", path);
@@ -347,16 +353,11 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
         /* ignore rules: relative path below the source root; matched dirs are
          * pruned (subtree never walked), files/symlinks skipped */
         if (kignore_count() > 0) {
-            const char *rel = fullpath;
-            if (g_ignore_root_len &&
-                strncmp(fullpath, g_ignore_root, g_ignore_root_len) == 0 &&
-                fullpath[g_ignore_root_len] == '/')
-                rel = fullpath + g_ignore_root_len + 1;
-            if (kignore_match(rel, S_ISDIR(st.st_mode) != 0)) {
+            if (kignore_match(rel_below_root(fullpath), S_ISDIR(st.st_mode) != 0)) {
                 if (S_ISDIR(st.st_mode)) g_ignored_dirs++; else g_ignored_files++;
                 static int trace = -1;
                 if (trace < 0) trace = getenv("KOPIA_TRACE") != NULL;
-                if (trace) fprintf(stderr, "diag: ignored %s\n", rel);
+                if (trace) fprintf(stderr, "diag: ignored %s\n", rel_below_root(fullpath));
                 continue;
             }
         }
@@ -434,7 +435,12 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
             strcpy(e->type, "f");
             e->size = (long long)st.st_size;
             mtime_of(fullpath, e->mtime, sizeof(e->mtime));
-            if (upload_file_entry(s, fullpath, e->oid, sizeof(e->oid)) != 0) {
+            /* incremental: unchanged files (same size + mtime) reuse the
+             * previous object id — no read, no chunking, no upload */
+            if (kcache_lookup_file(dir_rel, de->d_name, e->size, e->mtime,
+                                   e->oid, sizeof(e->oid)) == 1) {
+                g_reused_files++;
+            } else if (upload_file_entry(s, fullpath, e->oid, sizeof(e->oid)) != 0) {
                 fprintf(stderr, "diag: skipping file %s (upload failed)\n", fullpath);
                 g_skipped_files++;
                 continue; /* omit from snapshot, keep walking */
@@ -479,7 +485,9 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
               stats->files, stats->symlinks, stats->dirs, stats->maxtime);
     sb_puts(&sb, "}\n");
 
-    free(entries);
+    sha256((const unsigned char *)sb.buf, sb.len, json_sha);
+    *entries_out = entries;
+    *n_out = n;
     *json_out = sb.buf;
     (void)s;
     return 0;
@@ -488,17 +496,32 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
 static int upload_dir_recursive(kopia_session_t *s, const char *path, char *oid, size_t oid_len,
                                 dir_stats_t *stats) {
     char *json = NULL;
-    if (build_dir_json(s, path, &json, stats) != 0) {
+    dir_entry_t *entries = NULL;
+    int n = 0;
+    unsigned char sha[32];
+    if (build_dir_json(s, path, &json, stats, &entries, &n, sha) != 0) {
         fprintf(stderr, "diag: build_dir_json failed for %s\n", path);
         return -1;
     }
 
-    ksrc_t src = {0};
-    src.buf = (const unsigned char *)json;
-    src.len = strlen(json);
-    int rc = upload_stream(s, &src, "k", oid, oid_len);
+    const char *rel = rel_below_root(path);
+    int rc;
+    if (kcache_lookup_dir(rel, sha, oid, oid_len) == 1) {
+        g_reused_dirs++; /* unchanged subtree: previous dir object is still valid */
+        rc = 0;
+    } else {
+        ksrc_t src = {0};
+        src.buf = (const unsigned char *)json;
+        src.len = strlen(json);
+        rc = upload_stream(s, &src, "k", oid, oid_len);
+        if (rc != 0) fprintf(stderr, "diag: dir upload_stream failed for %s\n", path);
+    }
+
+    /* remember this run's state for the next run (only if the push succeeds) */
+    kcache_record_dir(rel, entries, n, oid, sha);
+
+    free(entries);
     free(json);
-    if (rc != 0) fprintf(stderr, "diag: dir upload_stream failed for %s\n", path);
     return rc;
 }
 
@@ -509,12 +532,19 @@ int kup_upload_path(kopia_session_t *s, const char *path, char *object_id, size_
         return -1;
     }
     if (S_ISDIR(st.st_mode)) {
-        /* ignore matching is relative to the walked root */
+        /* ignore matching and the cache are relative to the resolved root */
         if (realpath(path, g_ignore_root) != NULL)
             g_ignore_root_len = strlen(g_ignore_root);
 
+        /* incremental cache keyed on identity + source; loads the previous
+         * run's state and starts recording this run's */
+        kcache_begin(&s->cfg, g_ignore_root);
+
         dir_stats_t stats;
-        int rc = upload_dir_recursive(s, path, object_id, oid_len, &stats);
+        /* walk the resolved path so fullpath and the root always agree,
+         * even when the source path contains symlinks (e.g. /tmp -> /private/tmp) */
+        int rc = upload_dir_recursive(s, g_ignore_root_len ? g_ignore_root : path,
+                                      object_id, oid_len, &stats);
         if (rc == 0) {
             /* root summary feeds the snapshot manifest */
             g_total_size = stats.size;
@@ -522,6 +552,9 @@ int kup_upload_path(kopia_session_t *s, const char *path, char *object_id, size_
             g_symlinks = stats.symlinks;
             g_dirs = stats.dirs;
             snprintf(g_maxtime, sizeof(g_maxtime), "%s", stats.maxtime);
+            if (g_reused_files || g_reused_dirs)
+                fprintf(stderr, "diag: reused %lld files, %lld dirs from incremental cache\n",
+                        g_reused_files, g_reused_dirs);
             if (g_ignored_files || g_ignored_dirs)
                 fprintf(stderr, "diag: ignored %lld files, %lld dirs by ignore rules\n",
                         g_ignored_files, g_ignored_dirs);
