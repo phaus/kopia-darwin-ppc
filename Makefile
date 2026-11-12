@@ -21,7 +21,7 @@ MBEDTLS_CFLAGS ?=
 LDLIBS  ?= -lz
 MBEDTLS_LIBS ?= -lmbedtls -lmbedx509 -lmbedcrypto
 
-SRC := src/main.c src/backup.c src/kopia_client.c src/kopia_json.c src/kopia_splitter.c src/kopia_sha256.c \
+SRC := src/main.c src/backup.c src/kopia_client.c src/kopia_ignore.c src/kopia_json.c src/kopia_splitter.c src/kopia_sha256.c \
        src/kopia_tls.c src/kopia_hpack.c src/kopia_h2.c src/kopia_pb.c src/kopia_session.c src/kopia_upload.c
 
 BIN := bin

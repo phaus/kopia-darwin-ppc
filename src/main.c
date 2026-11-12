@@ -1,9 +1,22 @@
 #include "backup.h"
 #include "kopia.h"
 #include "kopia_internal.h"
+#include "kopia_ignore.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* read first line of a file into buf (password files: no trailing newline) */
+static int read_password_file(const char *path, char *buf, size_t buflen) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    if (!fgets(buf, (int)buflen, f)) { fclose(f); return -1; }
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
+    if (len > 0 && buf[len - 1] == '\r') buf[--len] = '\0';
+    fclose(f);
+    return 0;
+}
 
 static int cmd_kopia_push(int argc, char **argv) {
     kopia_config_t cfg = {0};
@@ -18,8 +31,24 @@ static int cmd_kopia_push(int argc, char **argv) {
             snprintf(cfg.repo_hostname, sizeof(cfg.repo_hostname), "%s", argv[++i]);
         } else if (strcmp(argv[i], "--password") == 0 && i + 1 < argc) {
             snprintf(cfg.repo_password, sizeof(cfg.repo_password), "%s", argv[++i]);
+        } else if (strcmp(argv[i], "--password-file") == 0 && i + 1 < argc) {
+            if (read_password_file(argv[++i], cfg.repo_password, sizeof(cfg.repo_password)) != 0) {
+                fprintf(stderr, "cannot read --password-file %s\n", argv[i]);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--fingerprint") == 0 && i + 1 < argc) {
             snprintf(cfg.fingerprint, sizeof(cfg.fingerprint), "%s", argv[++i]);
+        } else if (strcmp(argv[i], "--ignore") == 0 && i + 1 < argc) {
+            if (kignore_add_pattern(argv[++i]) != 0) {
+                fprintf(stderr, "invalid --ignore pattern: %s\n", argv[i]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--ignore-file") == 0 && i + 1 < argc) {
+            int n = kignore_add_file(argv[++i]);
+            if (n < 0) {
+                fprintf(stderr, "cannot read --ignore-file %s\n", argv[i]);
+                return 1;
+            }
         } else {
             path = argv[i];
         }
@@ -27,7 +56,24 @@ static int cmd_kopia_push(int argc, char **argv) {
 
     if (!cfg.server_url[0] || !cfg.repo_user[0] || !path) {
         fprintf(stderr, "Usage: %s kopia-push --url https://host:port --user NAME "
-                        "--hostname HOST --password PASS [--fingerprint FP] <path>\n", argv[0]);
+                        "--hostname HOST [--password PASS | --password-file FILE] "
+                        "[--fingerprint FP] [--ignore PAT]... [--ignore-file FILE]... <path>\n", argv[0]);
+        return 1;
+    }
+
+    if (!cfg.repo_password[0]) {
+        const char *env = getenv("KOPIA_PASSWORD");
+        if (env) snprintf(cfg.repo_password, sizeof(cfg.repo_password), "%s", env);
+    }
+    if (!cfg.repo_password[0]) {
+        fprintf(stderr, "no password: use --password, --password-file or KOPIA_PASSWORD\n");
+        return 1;
+    }
+
+    /* default rule source, kopia-compatible: <path>/.kopiaignore */
+    int rcdef = kignore_load_source_default(path);
+    if (rcdef < 0) {
+        fprintf(stderr, "cannot read .kopiaignore in %s\n", path);
         return 1;
     }
 

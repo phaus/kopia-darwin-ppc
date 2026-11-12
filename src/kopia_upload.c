@@ -14,6 +14,7 @@
 #include <unistd.h> /* readlink */
 
 #include "kopia_internal.h"
+#include "kopia_ignore.h"
 #include "kopia_json.h"
 
 #define SPLITTER_WINDOW 64
@@ -302,6 +303,11 @@ typedef struct {
 } dir_stats_t;
 
 static long long g_skipped_files = 0, g_skipped_dirs = 0, g_skipped_special = 0;
+static long long g_ignored_files = 0, g_ignored_dirs = 0;
+
+/* source root for relative ignore paths (realpath'd, no trailing slash) */
+static char    g_ignore_root[4096] = "";
+static size_t  g_ignore_root_len = 0;
 
 static int upload_dir_recursive(kopia_session_t *s, const char *path, char *oid, size_t oid_len,
                                 dir_stats_t *stats);
@@ -337,6 +343,23 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
         snprintf(fullpath, sizeof(fullpath), "%s/%s", path, de->d_name);
         struct stat st;
         if (lstat(fullpath, &st) != 0) continue;
+
+        /* ignore rules: relative path below the source root; matched dirs are
+         * pruned (subtree never walked), files/symlinks skipped */
+        if (kignore_count() > 0) {
+            const char *rel = fullpath;
+            if (g_ignore_root_len &&
+                strncmp(fullpath, g_ignore_root, g_ignore_root_len) == 0 &&
+                fullpath[g_ignore_root_len] == '/')
+                rel = fullpath + g_ignore_root_len + 1;
+            if (kignore_match(rel, S_ISDIR(st.st_mode) != 0)) {
+                if (S_ISDIR(st.st_mode)) g_ignored_dirs++; else g_ignored_files++;
+                static int trace = -1;
+                if (trace < 0) trace = getenv("KOPIA_TRACE") != NULL;
+                if (trace) fprintf(stderr, "diag: ignored %s\n", rel);
+                continue;
+            }
+        }
 
         if (n >= cap) {
             cap = cap ? cap * 2 : 16;
@@ -486,6 +509,10 @@ int kup_upload_path(kopia_session_t *s, const char *path, char *object_id, size_
         return -1;
     }
     if (S_ISDIR(st.st_mode)) {
+        /* ignore matching is relative to the walked root */
+        if (realpath(path, g_ignore_root) != NULL)
+            g_ignore_root_len = strlen(g_ignore_root);
+
         dir_stats_t stats;
         int rc = upload_dir_recursive(s, path, object_id, oid_len, &stats);
         if (rc == 0) {
@@ -495,6 +522,9 @@ int kup_upload_path(kopia_session_t *s, const char *path, char *object_id, size_
             g_symlinks = stats.symlinks;
             g_dirs = stats.dirs;
             snprintf(g_maxtime, sizeof(g_maxtime), "%s", stats.maxtime);
+            if (g_ignored_files || g_ignored_dirs)
+                fprintf(stderr, "diag: ignored %lld files, %lld dirs by ignore rules\n",
+                        g_ignored_files, g_ignored_dirs);
             if (g_skipped_files || g_skipped_dirs || g_skipped_special)
                 fprintf(stderr, "diag: completed with %lld skipped files, %lld skipped dirs, %lld skipped special files\n",
                         g_skipped_files, g_skipped_dirs, g_skipped_special);
