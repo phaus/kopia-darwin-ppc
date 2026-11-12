@@ -278,7 +278,8 @@ static int cmp_entry(const void *a, const void *b) {
 
 static int mtime_of(const char *path, char *out, size_t outlen) {
     struct stat st;
-    if (stat(path, &st) != 0) return -1;
+    /* lstat: for symlinks use the link's own mtime (dangling links have no target) */
+    if (lstat(path, &st) != 0) return -1;
 #ifdef __APPLE__
     long long s = (long long)st.st_mtimespec.tv_sec;
     long ns = st.st_mtimespec.tv_nsec;
@@ -361,7 +362,8 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
             e->size = 0;
             stats->size += child.size;
             stats->files += child.files;
-            stats->dirs += child.dirs + 1;
+            stats->dirs += child.dirs; /* child.dirs already includes the child itself */
+            stats->symlinks += child.symlinks;
             if (child.maxtime[0] &&
                 (stats->maxtime[0] == '\0' || strcmp(child.maxtime, stats->maxtime) > 0))
                 snprintf(stats->maxtime, sizeof(stats->maxtime), "%s", child.maxtime);
@@ -409,6 +411,9 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
         n++;
     }
     closedir(d);
+
+    /* a directory's summary.dirs counts itself (kopia dir_manifest_builder.go:97) */
+    stats->dirs++;
 
     qsort(entries, (size_t)n, sizeof(dir_entry_t), cmp_entry);
 
