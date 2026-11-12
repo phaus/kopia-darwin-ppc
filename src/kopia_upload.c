@@ -368,11 +368,27 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
                 (stats->maxtime[0] == '\0' || strcmp(child.maxtime, stats->maxtime) > 0))
                 snprintf(stats->maxtime, sizeof(stats->maxtime), "%s", child.maxtime);
         } else if (S_ISLNK(st.st_mode)) {
-            /* symlink: the object holds the link target string (type "s") */
-            char target[4096];
-            ssize_t tl = readlink(fullpath, target, sizeof(target) - 1);
-            if (tl < 0) {
-                fprintf(stderr, "diag: readlink failed for %s: %s\n", fullpath, strerror(errno));
+            /* symlink: the object holds the link target string (type "s").
+             * lstat st_size is the target length — size the buffer from it
+             * and retry if the link changes underneath us. */
+            size_t bufsz = (size_t)st.st_size + 1;
+            if (bufsz < 64) bufsz = 64;
+            char *target = NULL;
+            ssize_t tl = -1;
+            int readlink_errno = 0;
+            for (int attempt = 0; attempt < 3; attempt++, bufsz *= 2) {
+                char *t = realloc(target, bufsz);
+                if (!t) { free(target); target = NULL; readlink_errno = ENOMEM; break; }
+                target = t;
+                tl = readlink(fullpath, target, bufsz - 1);
+                if (tl < 0) { readlink_errno = errno; break; }
+                if ((size_t)tl < bufsz - 1) break; /* full target fits */
+                tl = -1; /* truncated: target grew since lstat, retry bigger */
+            }
+            if (!target || tl < 0) {
+                fprintf(stderr, "diag: readlink failed for %s: %s\n", fullpath,
+                        target ? strerror(readlink_errno) : "out of memory");
+                free(target);
                 g_skipped_files++;
                 continue; /* omit from snapshot, keep walking */
             }
@@ -382,11 +398,13 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
             lsrc.len = (size_t)tl;
             if (upload_stream(s, &lsrc, "", e->oid, sizeof(e->oid)) != 0) {
                 fprintf(stderr, "diag: skipping symlink %s (upload failed)\n", fullpath);
+                free(target);
                 g_skipped_files++;
                 continue; /* omit from snapshot, keep walking */
             }
+            free(target);
             strcpy(e->type, "s");
-            e->size = (long long)st.st_size; /* lstat: length of target string */
+            e->size = (long long)tl; /* actual target length as read */
             mtime_of(fullpath, e->mtime, sizeof(e->mtime));
             stats->symlinks++;
         } else if (S_ISREG(st.st_mode)) {
