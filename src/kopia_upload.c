@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h> /* readlink */
 
 #include "kopia_internal.h"
 #include "kopia_json.h"
@@ -268,7 +269,7 @@ static void format_mtime_rfc3339(long long epoch_s, long nsec, char *out, size_t
 }
 
 /* aggregate summary for the most recently built directory + root file size */
-static long long g_total_size, g_files, g_dirs;
+static long long g_total_size, g_files, g_symlinks, g_dirs;
 static char g_maxtime[64] = "";
 
 static int cmp_entry(const void *a, const void *b) {
@@ -277,7 +278,8 @@ static int cmp_entry(const void *a, const void *b) {
 
 static int mtime_of(const char *path, char *out, size_t outlen) {
     struct stat st;
-    if (stat(path, &st) != 0) return -1;
+    /* lstat: for symlinks use the link's own mtime (dangling links have no target) */
+    if (lstat(path, &st) != 0) return -1;
 #ifdef __APPLE__
     long long s = (long long)st.st_mtimespec.tv_sec;
     long ns = st.st_mtimespec.tv_nsec;
@@ -294,11 +296,12 @@ static int mtime_of(const char *path, char *out, size_t outlen) {
 typedef struct {
     long long size;
     long long files;
+    long long symlinks;
     long long dirs;
     char maxtime[64];
 } dir_stats_t;
 
-static long long g_skipped_files = 0, g_skipped_dirs = 0;
+static long long g_skipped_files = 0, g_skipped_dirs = 0, g_skipped_special = 0;
 
 static int upload_dir_recursive(kopia_session_t *s, const char *path, char *oid, size_t oid_len,
                                 dir_stats_t *stats);
@@ -334,7 +337,6 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
         snprintf(fullpath, sizeof(fullpath), "%s/%s", path, de->d_name);
         struct stat st;
         if (lstat(fullpath, &st) != 0) continue;
-        if (S_ISLNK(st.st_mode)) continue; /* MVP: skip symlinks */
 
         if (n >= cap) {
             cap = cap ? cap * 2 : 16;
@@ -360,10 +362,51 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
             e->size = 0;
             stats->size += child.size;
             stats->files += child.files;
-            stats->dirs += child.dirs + 1;
+            stats->dirs += child.dirs; /* child.dirs already includes the child itself */
+            stats->symlinks += child.symlinks;
             if (child.maxtime[0] &&
                 (stats->maxtime[0] == '\0' || strcmp(child.maxtime, stats->maxtime) > 0))
                 snprintf(stats->maxtime, sizeof(stats->maxtime), "%s", child.maxtime);
+        } else if (S_ISLNK(st.st_mode)) {
+            /* symlink: the object holds the link target string (type "s").
+             * lstat st_size is the target length — size the buffer from it
+             * and retry if the link changes underneath us. */
+            size_t bufsz = (size_t)st.st_size + 1;
+            if (bufsz < 64) bufsz = 64;
+            char *target = NULL;
+            ssize_t tl = -1;
+            int readlink_errno = 0;
+            for (int attempt = 0; attempt < 3; attempt++, bufsz *= 2) {
+                char *t = realloc(target, bufsz);
+                if (!t) { free(target); target = NULL; readlink_errno = ENOMEM; break; }
+                target = t;
+                tl = readlink(fullpath, target, bufsz - 1);
+                if (tl < 0) { readlink_errno = errno; break; }
+                if ((size_t)tl < bufsz - 1) break; /* full target fits */
+                tl = -1; /* truncated: target grew since lstat, retry bigger */
+            }
+            if (!target || tl < 0) {
+                fprintf(stderr, "diag: readlink failed for %s: %s\n", fullpath,
+                        target ? strerror(readlink_errno) : "out of memory");
+                free(target);
+                g_skipped_files++;
+                continue; /* omit from snapshot, keep walking */
+            }
+            target[tl] = '\0';
+            ksrc_t lsrc = {0};
+            lsrc.buf = (const unsigned char *)target;
+            lsrc.len = (size_t)tl;
+            if (upload_stream(s, &lsrc, "", e->oid, sizeof(e->oid)) != 0) {
+                fprintf(stderr, "diag: skipping symlink %s (upload failed)\n", fullpath);
+                free(target);
+                g_skipped_files++;
+                continue; /* omit from snapshot, keep walking */
+            }
+            free(target);
+            strcpy(e->type, "s");
+            e->size = (long long)tl; /* actual target length as read */
+            mtime_of(fullpath, e->mtime, sizeof(e->mtime));
+            stats->symlinks++;
         } else if (S_ISREG(st.st_mode)) {
             strcpy(e->type, "f");
             e->size = (long long)st.st_size;
@@ -376,7 +419,9 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
             stats->size += e->size;
             stats->files++;
         } else {
-            continue; /* special files skipped */
+            fprintf(stderr, "diag: skipping special file %s\n", fullpath);
+            g_skipped_special++;
+            continue; /* FIFOs/sockets/devices: not supported by kopia either */
         }
         if (e->mtime[0] &&
             (stats->maxtime[0] == '\0' || strcmp(e->mtime, stats->maxtime) > 0))
@@ -384,6 +429,9 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
         n++;
     }
     closedir(d);
+
+    /* a directory's summary.dirs counts itself (kopia dir_manifest_builder.go:97) */
+    stats->dirs++;
 
     qsort(entries, (size_t)n, sizeof(dir_entry_t), cmp_entry);
 
@@ -404,8 +452,8 @@ static int build_dir_json(kopia_session_t *s, const char *path, char **json_out,
     }
     sb_puts(&sb, "],\"summary\":{\"size\":");
     sb_printf(&sb, "%lld", stats->size);
-    sb_printf(&sb, ",\"files\":%lld,\"dirs\":%lld,\"maxTime\":\"%s\"}",
-              stats->files, stats->dirs, stats->maxtime);
+    sb_printf(&sb, ",\"files\":%lld,\"symlinks\":%lld,\"dirs\":%lld,\"maxTime\":\"%s\"}",
+              stats->files, stats->symlinks, stats->dirs, stats->maxtime);
     sb_puts(&sb, "}\n");
 
     free(entries);
@@ -444,11 +492,12 @@ int kup_upload_path(kopia_session_t *s, const char *path, char *object_id, size_
             /* root summary feeds the snapshot manifest */
             g_total_size = stats.size;
             g_files = stats.files;
+            g_symlinks = stats.symlinks;
             g_dirs = stats.dirs;
             snprintf(g_maxtime, sizeof(g_maxtime), "%s", stats.maxtime);
-            if (g_skipped_files || g_skipped_dirs)
-                fprintf(stderr, "diag: completed with %lld skipped files, %lld skipped dirs\n",
-                        g_skipped_files, g_skipped_dirs);
+            if (g_skipped_files || g_skipped_dirs || g_skipped_special)
+                fprintf(stderr, "diag: completed with %lld skipped files, %lld skipped dirs, %lld skipped special files\n",
+                        g_skipped_files, g_skipped_dirs, g_skipped_special);
         }
         return rc;
     }
@@ -481,6 +530,7 @@ int kup_snapshot(kopia_session_t *s, const char *source_path,
             root_size = (long long)st.st_size;
             g_total_size = root_size;
             g_files = 1;
+            g_symlinks = 0;
             g_dirs = 0;
         }
     }
@@ -501,8 +551,8 @@ int kup_snapshot(kopia_session_t *s, const char *source_path,
     if (is_dir) {
         /* dirs carry a summary; file size goes on the entry itself */
         sb_printf(&sb, ",\"type\":\"d\",\"mode\":\"0%o\",\"mtime\":\"%s\","
-                     "\"summ\":{\"size\":%lld,\"files\":%lld,\"dirs\":%lld,\"maxTime\":\"%s\"}",
-                  mode, mt, g_total_size, g_files, g_dirs, g_maxtime);
+                     "\"summ\":{\"size\":%lld,\"files\":%lld,\"symlinks\":%lld,\"dirs\":%lld,\"maxTime\":\"%s\"}",
+                  mode, mt, g_total_size, g_files, g_symlinks, g_dirs, g_maxtime);
         sb_printf(&sb, ",\"obj\":\"%s\"}}", root_object_id);
     } else {
         sb_printf(&sb, ",\"type\":\"f\",\"mode\":\"0%o\",\"size\":%lld,\"mtime\":\"%s\",\"obj\":\"%s\"}}",
