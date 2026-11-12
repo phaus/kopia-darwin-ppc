@@ -78,13 +78,43 @@ smoke test against a local kopia server).
 
 ```
 kopia-darwin-ppc kopia-push --url https://kopia.example.com:51515 \
-    --user root --hostname my-g4 --password SECRET \
-    [--fingerprint XX:XX:…:XX] <file-or-directory>
+    --user root --hostname my-g4 \
+    [--password SECRET | --password-file FILE] \
+    [--fingerprint XX:XX:…:XX] \
+    [--ignore PATTERN]... [--ignore-file FILE]... <file-or-directory>
 ```
 
 Uploads the path (file or directory, recursively) and creates a kopia snapshot.
+The password can also come from `KOPIA_PASSWORD` (precedence: `--password`,
+`--password-file`, environment).
 Local CAS backend commands (`init`, `add`, `snapshot`, `list`, `restore`, `verify`)
 are documented in the repo (see `src/main.c` usage output).
+
+### Ignoring files
+
+`kopia-push` skips paths matched by ignore rules, with kopia/gitignore semantics
+for a documented subset:
+
+| Rule | Meaning |
+|---|---|
+| `*.log` | bare names match at any depth, files and directories |
+| `Library/Caches` | a pattern with separators anchors to the source root |
+| `build/` | trailing `/`: directories only |
+| `!keep.log` | `!` re-includes (last matching rule wins) |
+| `**/foo` | `**` as a whole segment spans any number of directories |
+| `# …`, blank | comments and blank lines are ignored |
+
+Rules come from three sources, all combined (later sources don't override
+earlier ones, the rule *order* within the list decides):
+
+- `--ignore PATTERN` flags
+- `--ignore-file FILE` files (one rule per line, `#` comments)
+- a `.kopiaignore` in the source root, kopia-compatible
+
+Matched directories are pruned — their subtrees are never walked — so ignore
+rules also shorten the run, not just the snapshot. As in git, a file cannot be
+re-included under a directory that is itself excluded. `.kopiaignore` files
+themselves are data and are included in the snapshot.
 
 ### Server-side setup (one-time)
 
@@ -124,10 +154,13 @@ trap 'rmdir "$LOCK"' EXIT
 exec >> /var/log/kopia-darwin-ppc.log 2>&1
 echo "=== $(date) kopia backup start"
 /usr/local/bin/kopia-push --url https://kopia.example.com:51515 \
-    --user root --hostname my-g4 --password SECRET \
+    --user root --hostname my-g4 --password-file /usr/local/etc/kopia-auth \
     --fingerprint XX:XX:…:XX /Users/youruser
 echo "=== $(date) rc=$?"
 ```
+
+The wrapper holds the password in `/usr/local/etc/kopia-auth` (mode 600) so it
+is not visible in `ps` output while a run is active.
 
 On Leopard, `/usr/bin/cron` is launched by launchd by default — no extra service setup.
 
@@ -145,6 +178,9 @@ On Leopard, `/usr/bin/cron` is launched by launchd by default — no extra servi
 
 ## Known limitations
 
+- ignore rules cover the common gitignore subset (see "Ignoring files"); no
+  per-directory `.kopiaignore` files below the source root, no `[a-z]` classes
+  and no backslash escapes
 - no incremental *transfer* yet — every run re-reads and re-sends all files
   (server-side dedup still avoids duplicate storage, and unchanged large contents
   are skipped server-side, but data is re-transferred)
